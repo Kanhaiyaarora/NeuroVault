@@ -153,3 +153,38 @@ export const logoutController = async (req, res, next) => {
     });
   }
 };
+
+export const getmeController = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const user = await userModel.findById(req.user.id).select("-password -__v");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "User data fetched successfully",
+      data: {
+        user,
+      },
+    });
+  } catch (error) {
+    console.error("getmeController error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve user",
+      error: error.message || "Internal server error",
+    });
+  }
+};
