@@ -85,6 +85,14 @@ contentSchema.index({ userId: 1, contentId: 1 });
 contentSchema.index({ userId: 1, normalizedUrl: 1 });
 contentSchema.index({ userId: 1, fileHash: 1 });
 
+// Full-text search support for keywords.
+contentSchema.index({
+  title: "text",
+  description: "text",
+  summary: "text",
+  tags: "text",
+});
+
 const contentModel = mongoose.model("Content", contentSchema);
 
 export default contentModel;
