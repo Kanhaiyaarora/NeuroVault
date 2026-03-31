@@ -3,6 +3,8 @@ import { getEmbeddings, getSummary } from "./ai.service.js";
 import { upsertVectors } from "./vector.service.js";
 import { splitTextToChunks } from "./text.service.js";
 
+// Service function that handles core enrichment pipeline for a content document.
+// 1) text assembly, 2) chunk splitting, 3) embeddings generation, 4) summary generation, 5) Pinecone upsert, 6) Mongo update.
 export const enrichContentAsync = async (content) => {
   try {
     const textCorpus = [

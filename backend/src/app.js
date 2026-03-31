@@ -29,4 +29,4 @@ app.use(errorHandler);
 
 export default app;
 
-// pinecone index name -> neuro-vault
+// Note: content services use Pinecone index "neuro-vault" via config/pinecone.js

@@ -85,7 +85,7 @@ contentSchema.index({ userId: 1, contentId: 1 });
 contentSchema.index({ userId: 1, normalizedUrl: 1 });
 contentSchema.index({ userId: 1, fileHash: 1 });
 
-// Full-text search support for keywords.
+// Full-text search support for keywords in content listings (content search fallback).
 contentSchema.index({
   title: "text",
   description: "text",

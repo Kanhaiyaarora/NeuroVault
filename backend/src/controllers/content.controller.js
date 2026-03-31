@@ -4,6 +4,7 @@ import contentModel from "../models/content.model.js";
 import { enrichContentAsync } from "../services/content.service.js";
 import { enqueueContentEnrichment } from "../services/queue.service.js";
 
+// Normalize URL for dedupe (strip query/hash, lower case)
 const buildNormalizedUrl = (url = "") => {
   try {
     const u = new URL(url.trim());
@@ -30,6 +31,8 @@ const ensureOwnership = (doc, userId) => {
   }
 };
 
+// Main create route for user content.
+// Handles dedupe, content create, and async enrichment queue trigger.
 export const createContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -285,6 +288,7 @@ export const graphContent = async (req, res) => {
   }
 };
 
+// Update route: allow user to update fields and re-queue enrichment.
 export const updateContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -484,6 +488,8 @@ export const ingestFromExtension = async (req, res) => {
   }
 };
 
+// PDF import endpoint (file upload through multipart/form-data).
+// Reads text from PDF and stores in content.textChunks before vectorization.
 export const importPdfContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -564,6 +570,7 @@ export const importPdfContent = async (req, res) => {
   }
 };
 
+// Manual re-enrich endpoint: triggers queue for existing content by id.
 export const enrichExistingPost = async (req, res) => {
   try {
     const userId = req.user.id;

@@ -1,5 +1,6 @@
 import { pineconeIndex } from "../config/pinecone.js";
 
+// Persist one content's embedding chunks to Pinecone vector index.
 export const upsertVectors = async ({
   contentId,
   userId,
@@ -29,6 +30,7 @@ export const upsertVectors = async ({
   return response;
 };
 
+// Query Pinecone to find top K nearest vectors for the user.
 export const querySimilarVectors = async ({ userId, vector, topK = 10 }) => {
   const queryReq = {
     vector,

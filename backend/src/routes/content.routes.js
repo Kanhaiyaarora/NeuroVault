@@ -22,6 +22,7 @@ import {
 
 const contentRouter = Router();
 
+// Routes for content CRUD, ingestion, graph, resurfacing and manual re-enrich.
 contentRouter.post("/", authUser, createContentValidator, createContent);
 contentRouter.post(
   "/ingest",

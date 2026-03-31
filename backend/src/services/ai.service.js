@@ -10,6 +10,7 @@ const llmClient = new ChatMistralAI({
   model: "mistral-large",
 });
 
+// Return embeddings for array of text chunks via Mistral embeddings model.
 export const getEmbeddings = async (textArray) => {
   if (!Array.isArray(textArray) || textArray.length === 0) return [];
   const cleanArray = textArray.filter(
@@ -19,6 +20,7 @@ export const getEmbeddings = async (textArray) => {
   return embeddingClient.embedDocuments(cleanArray);
 };
 
+// Generate a short summary of full text content using Mistral (LLM).
 export const getSummary = async (text) => {
   if (!text || !text.trim()) return "";
 
