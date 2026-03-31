@@ -1,6 +1,8 @@
 import crypto from "crypto";
+import pdf from "pdf-parse";
 import contentModel from "../models/content.model.js";
 import { enrichContentAsync } from "../services/content.service.js";
+import { enqueueContentEnrichment } from "../services/queue.service.js";
 
 const buildNormalizedUrl = (url = "") => {
   try {
@@ -80,10 +82,9 @@ export const createContent = async (req, res) => {
       contentId: crypto.randomUUID(),
     });
 
-    // async enrichment pipeline: summary + embedding + pinecone.
-    setImmediate(() => {
-      enrichContentAsync(data).catch((err) => console.error(err));
-    });
+    enqueueContentEnrichment(data._id).catch((err) =>
+      console.error("enqueueContentEnrichment createContent", err),
+    );
 
     return res.status(201).json({
       success: true,
@@ -310,9 +311,9 @@ export const updateContent = async (req, res) => {
     Object.assign(item, updates);
     await item.save();
 
-    setImmediate(() => {
-      enrichContentAsync(item).catch((err) => console.error(err));
-    });
+    enqueueContentEnrichment(item._id).catch((err) =>
+      console.error("enqueueContentEnrichment updateContent", err),
+    );
 
     return res.status(200).json({
       success: true,
@@ -478,6 +479,125 @@ export const ingestFromExtension = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to ingest content from extension",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
+export const importPdfContent = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "PDF file is required under `file` field",
+      });
+    }
+
+    if (req.file.mimetype !== "application/pdf") {
+      return res.status(400).json({
+        success: false,
+        message: "Uploaded file must be a PDF",
+      });
+    }
+
+    const parsed = await pdf(req.file.buffer);
+    const pdfText = parsed?.text?.trim() || "";
+
+    const title = req.body.title || req.file.originalname || "Untitled PDF";
+    const url = req.body.url || `uploaded://pdf/${crypto.randomUUID()}`;
+    const normalizedUrl = buildNormalizedUrl(url);
+    const fileHash = buildFileHash(req.file.buffer.toString("base64"));
+
+    const exists = await contentModel.findOne({
+      userId,
+      $or: [{ normalizedUrl }, { fileHash }],
+    });
+
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        message: "Similar content already exists",
+        data: { existingContentId: exists._id },
+      });
+    }
+
+    const data = await contentModel.create({
+      userId,
+      title,
+      url,
+      normalizedUrl,
+      fileHash,
+      description: req.body.description || "",
+      tags: Array.isArray(req.body.tags)
+        ? req.body.tags
+        : (req.body.tags || "")
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+      category: req.body.category || "",
+      subCategory: req.body.subCategory || "",
+      type: "pdf",
+      image: req.body.image || "",
+      summary: req.body.summary || "",
+      textChunks: pdfText ? [pdfText] : [],
+      vectorReady: false,
+      contentId: crypto.randomUUID(),
+    });
+
+    enqueueContentEnrichment(data._id).catch((err) =>
+      console.error("enqueueContentEnrichment importPdfContent", err),
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "PDF content created and queued for enrichment",
+      data,
+    });
+  } catch (error) {
+    console.error("importPdfContent error", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to import PDF content",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
+export const enrichExistingPost = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const item = await contentModel.findById(id);
+    if (!item) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Content item not found" });
+    }
+
+    ensureOwnership(item, userId);
+
+    const queued = await enqueueContentEnrichment(item._id);
+    if (!queued) {
+      return res.status(200).json({
+        success: true,
+        message: "Enrichment already queued or in progress",
+      });
+    }
+
+    return res.status(202).json({
+      success: true,
+      message: "Enrichment queued",
+    });
+  } catch (error) {
+    console.error("enrichExistingPost error", error);
+    if (error.statusCode === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Unable to queue enrichment",
       error: error.message || "Internal server error",
     });
   }
