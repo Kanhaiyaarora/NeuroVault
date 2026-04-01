@@ -1,8 +1,14 @@
 import crypto from "crypto";
 import pdf from "pdf-parse";
+import Tesseract from "tesseract.js";
+import ogs from "open-graph-scraper";
+import { YoutubeTranscript } from "youtube-transcript/dist/youtube-transcript.esm.js";
 import contentModel from "../models/content.model.js";
 import { enrichContentAsync } from "../services/content.service.js";
 import { enqueueContentEnrichment } from "../services/queue.service.js";
+import { getEmbeddings, generateRagAnswer } from "../services/ai.service.js";
+import { querySimilarVectors } from "../services/vector.service.js";
+import { imageKit } from "../config/imagekit.js";
 
 // Normalize URL for dedupe (strip query/hash, lower case)
 const buildNormalizedUrl = (url = "") => {
@@ -29,6 +35,21 @@ const ensureOwnership = (doc, userId) => {
     err.statusCode = 403;
     throw err;
   }
+};
+
+const extractTextFromImage = async (buffer) => {
+  const worker = Tesseract.createWorker({
+    logger: () => {},
+  });
+
+  await worker.load();
+  await worker.loadLanguage("eng");
+  await worker.initialize("eng");
+
+  const { data } = await worker.recognize(buffer);
+  await worker.terminate();
+
+  return (data?.text || "").trim();
 };
 
 // Main create route for user content.
@@ -352,6 +373,18 @@ export const deleteContent = async (req, res) => {
 
     ensureOwnership(item, userId);
 
+    // remove image assets from ImageKit when fileStorageId exists.
+    if (item.fileStorageId) {
+      try {
+        await imageKit.deleteFile(item.fileStorageId);
+      } catch (imgErr) {
+        console.warn(
+          `Unable to delete ImageKit file ${item.fileStorageId}`,
+          imgErr,
+        );
+      }
+    }
+
     await contentModel.deleteOne({ _id: id });
 
     return res.status(200).json({
@@ -384,12 +417,53 @@ export const searchContent = async (req, res) => {
     }
 
     if (semantic === "true") {
-      return res.status(501).json({
-        success: false,
-        message: "Semantic search is not implemented yet",
+      // Semantic search path using embeddings + Pinecone.
+      const embeddings = await getEmbeddings([q]);
+      if (!embeddings || embeddings.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: { query: q, total: 0, items: [] },
+        });
+      }
+
+      const queryVector = embeddings[0];
+      const matches = await querySimilarVectors({
+        userId,
+        vector: queryVector,
+        topK: parseInt(req.query.topK || "10", 10),
+      });
+
+      const contentIds = [...new Set(matches.map((m) => m.metadata.contentId))];
+      const contents = await contentModel
+        .find({ userId, contentId: { $in: contentIds } })
+        .select("-embedding -vectorIds")
+        .lean();
+
+      const contentMap = new Map(
+        contents.map((item) => [item.contentId, item]),
+      );
+      const items = matches
+        .map((match) => {
+          const content = contentMap.get(match.metadata.contentId);
+          if (!content) return null;
+          return {
+            score: match.score,
+            content,
+          };
+        })
+        .filter(Boolean);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          query: q,
+          total: items.length,
+          items,
+        },
       });
     }
 
+    // Text search fallback.
     const filter = {
       userId,
       $or: [
@@ -419,6 +493,71 @@ export const searchContent = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to search content",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
+export const ragContent = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { query, topK = 5 } = req.body;
+
+    if (!query || !query.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Query body parameter q is required",
+      });
+    }
+
+    const embeddings = await getEmbeddings([query]);
+    if (!embeddings || embeddings.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: { query, answer: "", references: [] },
+      });
+    }
+
+    const queryVector = embeddings[0];
+    const matches = await querySimilarVectors({
+      userId,
+      vector: queryVector,
+      topK: parseInt(topK, 10),
+    });
+
+    const contentIds = [...new Set(matches.map((m) => m.metadata.contentId))];
+    const contents = await contentModel
+      .find({ userId, contentId: { $in: contentIds } })
+      .select("-embedding -vectorIds")
+      .lean();
+
+    // Build context from the top matching chunks
+    const sortedMatches = matches
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, topK);
+
+    const snippets = sortedMatches.map((m) => m.metadata?.text || "");
+
+    const answer = await generateRagAnswer(query, snippets);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        query,
+        answer,
+        references: sortedMatches.map((m) => ({
+          contentId: m.metadata?.contentId,
+          score: m.score,
+          chunkIndex: m.metadata?.chunkIndex,
+        })),
+        contents,
+      },
+    });
+  } catch (error) {
+    console.error("ragContent error", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to generate RAG response",
       error: error.message || "Internal server error",
     });
   }
@@ -565,6 +704,279 @@ export const importPdfContent = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to import PDF content",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
+// YouTube import endpoint: fetch transcript via youtube-transcript, metadata by OG, create content, queue enrichment.
+export const importYoutubeContent = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const url = req.body.url;
+
+    if (!url || !url.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "YouTube URL is required",
+      });
+    }
+
+    let videoId = null;
+    try {
+      const parsedUrl = new URL(url);
+      videoId = parsedUrl.searchParams.get("v");
+      if (!videoId) {
+        const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
+        if (pathParts[0] === "shorts" && pathParts[1]) {
+          videoId = pathParts[1];
+        }
+      }
+    } catch (err) {
+      // fallback regex extraction
+      const match = url.match(/(?:v=|\/)([\w-]{11})/);
+      videoId = match?.[1] || null;
+    }
+
+    if (!videoId) {
+      return res.status(400).json({
+        success: false,
+        message: "Unable to parse YouTube video ID from URL",
+      });
+    }
+
+    let transcriptText = "";
+    try {
+      const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+      transcriptText = transcript.map((item) => item.text).join(" \n");
+    } catch (err) {
+      transcriptText = "";
+    }
+
+    const { error, result } = await ogs({ url });
+    const title =
+      req.body.title || result.ogTitle || `YouTube Video ${videoId}`;
+    const description = req.body.description || result.ogDescription || "";
+    const image = result.ogImage?.url || result.twitterImage?.url || "";
+
+    const normalizedUrl = buildNormalizedUrl(url);
+    const fileHash = buildFileHash(url + title + description);
+
+    const exists = await contentModel.findOne({
+      userId,
+      $or: [{ normalizedUrl }, { fileHash }],
+    });
+
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        message: "Similar content already exists",
+        data: { existingContentId: exists._id },
+      });
+    }
+
+    const data = await contentModel.create({
+      userId,
+      title,
+      url,
+      normalizedUrl,
+      fileHash,
+      description,
+      tags: Array.isArray(req.body.tags)
+        ? req.body.tags
+        : (req.body.tags || "")
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+      category: req.body.category || "",
+      subCategory: req.body.subCategory || "",
+      type: "youtube",
+      image,
+      summary: req.body.summary || "",
+      textChunks: transcriptText ? [transcriptText] : [],
+      vectorReady: false,
+      contentId: crypto.randomUUID(),
+    });
+
+    enqueueContentEnrichment(data._id).catch((err) =>
+      console.error("enqueueContentEnrichment importYoutubeContent", err),
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "YouTube content created and queued for enrichment",
+      data,
+    });
+  } catch (error) {
+    console.error("importYoutubeContent error", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to import YouTube content",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
+// Tweet import endpoint: fetch OG metadata + tweet text from OG description, create content, queue enrichment.
+export const importTweetContent = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const url = req.body.url;
+
+    if (!url || !url.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Tweet URL is required",
+      });
+    }
+
+    const { error, result } = await ogs({ url });
+    const title = req.body.title || result.ogTitle || "Tweet";
+    const description = req.body.description || result.ogDescription || "";
+    const image = result.ogImage?.url || result.twitterImage?.url || "";
+    const tweetText = description || result.twitterDescription || "";
+
+    const normalizedUrl = buildNormalizedUrl(url);
+    const fileHash = buildFileHash(url + title + description);
+
+    const exists = await contentModel.findOne({
+      userId,
+      $or: [{ normalizedUrl }, { fileHash }],
+    });
+
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        message: "Similar content already exists",
+        data: { existingContentId: exists._id },
+      });
+    }
+
+    const data = await contentModel.create({
+      userId,
+      title,
+      url,
+      normalizedUrl,
+      fileHash,
+      description,
+      tags: Array.isArray(req.body.tags)
+        ? req.body.tags
+        : (req.body.tags || "")
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+      category: req.body.category || "",
+      subCategory: req.body.subCategory || "",
+      type: "tweet",
+      image,
+      summary: req.body.summary || "",
+      textChunks: tweetText ? [tweetText] : [],
+      vectorReady: false,
+      contentId: crypto.randomUUID(),
+    });
+
+    enqueueContentEnrichment(data._id).catch((err) =>
+      console.error("enqueueContentEnrichment importTweetContent", err),
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Tweet content created and queued for enrichment",
+      data,
+    });
+  } catch (error) {
+    console.error("importTweetContent error", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to import Tweet content",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
+// Image import endpoint: upload image, OCR text, store metadata, queue enrichment.
+export const importImageContent = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Image file is required under `file` field",
+      });
+    }
+
+    if (!req.file.mimetype.startsWith("image/")) {
+      return res.status(400).json({
+        success: false,
+        message: "Uploaded file must be an image",
+      });
+    }
+
+    const fileBufferBase64 = req.file.buffer.toString("base64");
+    const imageUpload = await imageKit.upload({
+      file: fileBufferBase64,
+      fileName: req.file.originalname || `image-${Date.now()}`,
+    });
+
+    const extractedText = await extractTextFromImage(req.file.buffer);
+
+    const title = req.body.title || req.file.originalname || "Untitled Image";
+    const url = req.body.url || `uploaded://image/${crypto.randomUUID()}`;
+    const normalizedUrl = buildNormalizedUrl(url);
+    const fileHash = buildFileHash(req.file.buffer.toString("base64"));
+
+    const exists = await contentModel.findOne({
+      userId,
+      $or: [{ normalizedUrl }, { fileHash }],
+    });
+
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        message: "Similar content already exists",
+        data: { existingContentId: exists._id },
+      });
+    }
+
+    const data = await contentModel.create({
+      userId,
+      title,
+      url,
+      normalizedUrl,
+      fileHash,
+      description: req.body.description || "",
+      tags: Array.isArray(req.body.tags)
+        ? req.body.tags
+        : (req.body.tags || "")
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+      category: req.body.category || "",
+      subCategory: req.body.subCategory || "",
+      type: "image",
+      image: imageUpload.url || "",
+      fileStorageId: imageUpload.fileId || "",
+      summary: req.body.summary || "",
+      textChunks: extractedText ? [extractedText] : [],
+      vectorReady: false,
+      contentId: crypto.randomUUID(),
+    });
+
+    enqueueContentEnrichment(data._id).catch((err) =>
+      console.error("enqueueContentEnrichment importImageContent", err),
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Image content created and queued for enrichment",
+      data,
+    });
+  } catch (error) {
+    console.error("importImageContent error", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to import image content",
       error: error.message || "Internal server error",
     });
   }

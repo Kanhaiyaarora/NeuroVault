@@ -10,14 +10,18 @@ import {
   createContent,
   ingestFromExtension,
   importPdfContent,
+  importImageContent,
   enrichExistingPost,
   getContentById,
   listContent,
   updateContent,
   deleteContent,
   searchContent,
+  ragContent,
   graphContent,
   resurfacingContent,
+  importYoutubeContent,
+  importTweetContent,
 } from "../controllers/content.controller.js";
 
 const contentRouter = Router();
@@ -36,7 +40,16 @@ contentRouter.post(
   upload.single("file"),
   importPdfContent,
 );
+contentRouter.post(
+  "/import-image",
+  authUser,
+  upload.single("file"),
+  importImageContent,
+);
+contentRouter.post("/import-youtube", authUser, importYoutubeContent);
+contentRouter.post("/import-tweet", authUser, importTweetContent);
 contentRouter.post("/:id/enrich", authUser, enrichExistingPost);
+contentRouter.post("/rag", authUser, ragContent);
 contentRouter.get("/", authUser, listContentValidator, listContent);
 contentRouter.get("/search", authUser, searchContent);
 contentRouter.get("/graph", authUser, graphContent);
