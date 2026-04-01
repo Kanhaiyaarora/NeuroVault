@@ -18,6 +18,7 @@ import {
   deleteContent,
   searchContent,
   ragContent,
+  relatedContent,
   graphContent,
   resurfacingContent,
   importYoutubeContent,
@@ -50,6 +51,8 @@ contentRouter.post("/import-youtube", authUser, importYoutubeContent);
 contentRouter.post("/import-tweet", authUser, importTweetContent);
 contentRouter.post("/:id/enrich", authUser, enrichExistingPost);
 contentRouter.post("/rag", authUser, ragContent);
+contentRouter.post("/query", authUser, ragContent);
+contentRouter.get("/related", authUser, relatedContent);
 contentRouter.get("/", authUser, listContentValidator, listContent);
 contentRouter.get("/search", authUser, searchContent);
 contentRouter.get("/graph", authUser, graphContent);

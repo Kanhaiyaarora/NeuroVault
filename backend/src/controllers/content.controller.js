@@ -563,6 +563,114 @@ export const ragContent = async (req, res) => {
   }
 };
 
+// Related content endpoint: combines vector similarity + tag/category graph scoring.
+export const relatedContent = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { contentId, topK = 5 } = req.query;
+
+    if (!contentId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "contentId query param is required" });
+    }
+
+    const base = await contentModel.findOne({ userId, contentId });
+    if (!base) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Base content not found" });
+    }
+
+    const related = new Map();
+
+    // Tag + category graph similarity scoring
+    const graphMatch = await contentModel
+      .find({
+        userId,
+        _id: { $ne: base._id },
+        $or: [
+          { category: base.category },
+          { subCategory: base.subCategory },
+          { tags: { $in: base.tags || [] } },
+        ],
+      })
+      .select("contentId title tags category subCategory")
+      .lean();
+
+    graphMatch.forEach((item) => {
+      let score = 0;
+      if (base.category && item.category === base.category) score += 1;
+      if (base.subCategory && item.subCategory === base.subCategory) score += 1;
+      const sharedTags = (base.tags || []).filter((tag) =>
+        (item.tags || []).includes(tag),
+      );
+      score += sharedTags.length;
+      if (score > 0) {
+        related.set(item.contentId, { type: "graph", score, content: item });
+      }
+    });
+
+    // Vector similarity via base.embedding (if available) and Pinecone query
+    if (Array.isArray(base.embedding) && base.embedding.length > 0) {
+      const vectorMatches = await querySimilarVectors({
+        userId,
+        vector: base.embedding,
+        topK: parseInt(topK, 10),
+      });
+
+      const vectorContentIds = [
+        ...new Set(vectorMatches.map((m) => m.metadata.contentId)),
+      ];
+      const vectorContents = await contentModel
+        .find({
+          userId,
+          contentId: { $in: vectorContentIds },
+          _id: { $ne: base._id },
+        })
+        .select("contentId title tags category subCategory")
+        .lean();
+
+      const vectorMap = new Map(
+        vectorContents.map((item) => [item.contentId, item]),
+      );
+      vectorMatches.forEach((match) => {
+        const cid = match.metadata.contentId;
+        const content = vectorMap.get(cid);
+        if (!content) return;
+
+        const existing = related.get(cid);
+        const newScore = (match.score || 0) + (existing?.score || 0);
+        related.set(cid, {
+          type: "vector",
+          score: newScore,
+          content,
+        });
+      });
+    }
+
+    const sorted = [...related.values()]
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, parseInt(topK, 10));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        contentId,
+        baseContentId: base.contentId,
+        related: sorted,
+      },
+    });
+  } catch (error) {
+    console.error("relatedContent error", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to compute related content",
+      error: error.message || "Internal server error",
+    });
+  }
+};
+
 export const resurfacingContent = async (req, res) => {
   try {
     const userId = req.user.id;
