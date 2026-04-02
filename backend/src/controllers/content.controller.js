@@ -52,8 +52,9 @@ const extractTextFromImage = async (buffer) => {
   return (data?.text || "").trim();
 };
 
-// Main create route for user content.
-// Handles dedupe, content create, and async enrichment queue trigger.
+// POST /api/content
+// Body: { title, url, description, tags, category, subCategory, type, image, summary, textChunks }
+// Creates content with duplicate protection and triggers async enrich (embeddings + summary + Pinecone).
 export const createContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -125,6 +126,9 @@ export const createContent = async (req, res) => {
   }
 };
 
+// GET /api/content
+// Query params: page, limit, q, tags, type, category, subCategory
+// Returns paginated list for current user, filters by search / tags / type.
 export const listContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -196,6 +200,9 @@ export const listContent = async (req, res) => {
   }
 };
 
+// GET /api/content/:id
+// Path param: id
+// Returns content item by ID, owner-only.
 export const getContentById = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -229,6 +236,8 @@ export const getContentById = async (req, res) => {
   }
 };
 
+// GET /api/content/graph
+// No input params. Returns graph nodes + edges built from tags/category relations.
 export const graphContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -309,7 +318,9 @@ export const graphContent = async (req, res) => {
   }
 };
 
-// Update route: allow user to update fields and re-queue enrichment.
+// PATCH /api/content/:id
+// Path param: id
+// Body: fields to update; re-queues enrichment after save.
 export const updateContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -358,6 +369,9 @@ export const updateContent = async (req, res) => {
   }
 };
 
+// DELETE /api/content/:id
+// Path param: id
+// Deletes content and ImageKit file (if exists) for owner.
 export const deleteContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -404,6 +418,9 @@ export const deleteContent = async (req, res) => {
   }
 };
 
+// GET /api/content/search
+// Query params: q, semantic=true|false, topK
+// Does keyword search or semantic vector search (if semantic=true)
 export const searchContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -498,6 +515,10 @@ export const searchContent = async (req, res) => {
   }
 };
 
+// POST /api/content/rag
+// POST /api/content/query
+// Body: { query, topK }
+// Returns generated RAG response from text chunks + Pinecone matches.
 export const ragContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -563,7 +584,9 @@ export const ragContent = async (req, res) => {
   }
 };
 
-// Related content endpoint: combines vector similarity + tag/category graph scoring.
+// GET /api/content/related
+// Query params: contentId, topK
+// Returns related content via tag/category graph + vector similarity
 export const relatedContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -671,6 +694,9 @@ export const relatedContent = async (req, res) => {
   }
 };
 
+// GET /api/content/resurface
+// Query params: days (default 30), limit (default 25)
+// Returns older content prioritized by tag richness and age.
 export const resurfacingContent = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -720,6 +746,8 @@ export const resurfacingContent = async (req, res) => {
   }
 };
 
+// POST /api/content/ingest
+// same as create content but from browser extension payload.
 export const ingestFromExtension = async (req, res) => {
   try {
     // Reuse createContent with the same validation and structure.

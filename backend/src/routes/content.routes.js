@@ -27,34 +27,36 @@ import {
 
 const contentRouter = Router();
 
-// Routes for content CRUD, ingestion, graph, resurfacing and manual re-enrich.
-contentRouter.post("/", authUser, createContentValidator, createContent);
+// Core content CRUD endpoints
+contentRouter.post("/", authUser, createContentValidator, createContent); // create new content
 contentRouter.post(
   "/ingest",
   authUser,
   createContentValidator,
   ingestFromExtension,
-);
+); // extension ingestion alias
+
+// File + media ingest endpoints
 contentRouter.post(
   "/import",
   authUser,
   upload.single("file"),
   importPdfContent,
-);
+); // PDF import
 contentRouter.post(
   "/import-image",
   authUser,
   upload.single("file"),
   importImageContent,
-);
-contentRouter.post("/import-youtube", authUser, importYoutubeContent);
-contentRouter.post("/import-tweet", authUser, importTweetContent);
-contentRouter.post("/:id/enrich", authUser, enrichExistingPost);
-contentRouter.post("/rag", authUser, ragContent);
-contentRouter.post("/query", authUser, ragContent);
-contentRouter.get("/related", authUser, relatedContent);
-contentRouter.get("/", authUser, listContentValidator, listContent);
-contentRouter.get("/search", authUser, searchContent);
+); // image import + OCR
+contentRouter.post("/import-youtube", authUser, importYoutubeContent); // yt ingestion
+contentRouter.post("/import-tweet", authUser, importTweetContent); // tweet ingestion
+contentRouter.post("/:id/enrich", authUser, enrichExistingPost); // manual re-enrich request
+contentRouter.post("/rag", authUser, ragContent); // RAG answer endpoint
+contentRouter.post("/query", authUser, ragContent); // alias for RAG query
+contentRouter.get("/related", authUser, relatedContent); // related items
+contentRouter.get("/", authUser, listContentValidator, listContent); // list content (pagination+filters)
+contentRouter.get("/search", authUser, searchContent); // text/semantic search
 contentRouter.get("/graph", authUser, graphContent);
 contentRouter.get("/resurface", authUser, resurfacingContent);
 contentRouter.get("/:id", authUser, getContentById);
