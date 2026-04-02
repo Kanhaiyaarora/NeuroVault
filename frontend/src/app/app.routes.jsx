@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from "react-router-dom"
+import { createBrowserRouter } from "react-router-dom"
 import Protected from "../features/auth/components/Protected"
 import LoginPage from "../features/auth/pages/LoginPage"
 import SignupPage from "../features/auth/pages/SignupPage"
@@ -6,10 +6,17 @@ import DashboardPage from "../features/dashboard/pages/DashboardPage"
 import ContentPage from "../features/content/pages/ContentPage"
 import ChatPage from "../features/chat/pages/ChatPage"
 import GraphPage from "../features/graph/pages/GraphPage"
+import FallbackRoute from "../features/auth/components/FallbackRoute"
+
+import LandingPage from "../features/landing/pages/LandingPage"
 
 export const router = createBrowserRouter([
   {
     path: "/",
+    element: <LandingPage />,
+  },
+  {
+    path: "/app",
     element: <Protected />,
     children: [
       { index: true, element: <DashboardPage /> },
@@ -21,5 +28,5 @@ export const router = createBrowserRouter([
   },
   { path: "/login", element: <LoginPage /> },
   { path: "/signup", element: <SignupPage /> },
-  { path: "*", element: <Navigate to="/" replace /> },
+  { path: "*", element: <FallbackRoute /> },
 ])
