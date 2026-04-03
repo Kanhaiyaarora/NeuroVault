@@ -1,8 +1,9 @@
 import { Navigate } from "react-router-dom"
-import { isAuthenticated } from "../utils/auth.service"
+import { useAuth } from "../hooks/useAuth"
 
 const FallbackRoute = () => {
-  return isAuthenticated() ? <Navigate to="/app/dashboard" replace /> : <Navigate to="/" replace />
+  const { isAuthenticated } = useAuth()
+  return isAuthenticated ? <Navigate to="/app/dashboard" replace /> : <Navigate to="/" replace />
 }
 
 export default FallbackRoute
